@@ -1,3 +1,4 @@
+from base64 import encode
 from multiprocessing.sharedctypes import Value
 import spacy
 from ext.luima_sbd.sbd import text2sentences
@@ -29,7 +30,7 @@ from sklearn.decomposition import PCA
 
 import csv
 
-'''
+"""
 Adapted code from:
 
 https://gitlab.gwdg.de/tillmann.doenicke/disrpt2021-tmvm/-/tree/master
@@ -43,7 +44,7 @@ https://archive.org/details/Law2Vec
 
 
 
-'''
+"""
 
 
 @dataclass(frozen=True)
@@ -95,32 +96,28 @@ class CaseHOLDFeatures:
     choices_symbolic: List[SymbolicFeatures]
 
 
-# @dataclass
-# class DifferentialCorpus:
-
-#     appendix: Dict[int, List[str]]
-#     vectors: Dict[int, Floats1d]
-
 def L1_SOW(vectors):
     sum_ = np.sum(vectors)
     return sum_ / np.linalg.norm(sum)
 
+
 def all_but_the_top(v, D):
-      """
+    """
       All-but-the-Top: Simple and Effective Postprocessing for Word Representations
       https://arxiv.org/abs/1702.01417
       Arguments:
           :v: word vectors of shape (n_words, n_dimensions)
           :D: number of principal components to subtract
       """
-      # 1. Subtract mean vector
-      v_tilde = v - np.mean(v, axis=0)
-      # 2. Compute the first `D` principal components
-      #    on centered embedding vectors
-      u = PCA(n_components=D).fit(v_tilde).components_  # [D, emb_size]
-      # Subtract first `D` principal components
-      # [vocab_size, emb_size] @ [emb_size, D] @ [D, emb_size] -> [vocab_size, emb_size]
-      return v_tilde - (v @ u.T @ u)  
+    # 1. Subtract mean vector
+    v_tilde = v - np.mean(v, axis=0)
+    # 2. Compute the first `D` principal components
+    #    on centered embedding vectors
+    u = PCA(n_components=D).fit(v_tilde).components_  # [D, emb_size]
+    # Subtract first `D` principal components
+    # [vocab_size, emb_size] @ [emb_size, D] @ [D, emb_size] -> [vocab_size, emb_size]
+    return v_tilde - (v @ u.T @ u)
+
 
 def cosine_sims(query, supers):
     norm = np.linalg.norm(query)
@@ -129,94 +126,99 @@ def cosine_sims(query, supers):
     similarities = dot_products / (norm * all_norms)
     return similarities
 
-def build_vocabulary(features, word2vec):
-    vocabulary = {'N' : {'word' : [], 'vec' : []}, 'V' : {'word' : [], 'vec' : []}, 'S' : {'word' : [], 'vec' : []}, 'A' : {'word' : [], 'vec' : []}}
+
+def build_vocabulary(word2vec, features):
+    vocabulary = {"N": {"word": [], "vec": []}, "V": {"word": [], "vec": []}, "S": {"word": [], "vec": []}, "A": {"word": [], "vec": []}}
 
     for chf in features:
 
         for n in chf.context_symbolic.nouns:
-            if n not in vocabulary['N']['word']:
-                vocabulary['N']['word'].append(n)
-                vocabulary['N']['vec'].append(word2vec[n])
+            if n not in vocabulary["N"]["word"]:
+                vocabulary["N"]["word"].append(n)
+                vocabulary["N"]["vec"].append(word2vec[n])
 
         for v in chf.context_symbolic.verbs:
-            if v not in vocabulary['V']['word']:
-                vocabulary['V']['word'].append(v)
-                vocabulary['V']['vec'].append(word2vec[v])
+            if v not in vocabulary["V"]["word"]:
+                vocabulary["V"]["word"].append(v)
+                vocabulary["V"]["vec"].append(word2vec[v])
 
         for s in chf.context_symbolic.subjs:
-            if s not in vocabulary['S']['word']:
-                vocabulary['S']['word'].append(s)
-                vocabulary['S']['vec'].append(word2vec[s])
+            if s not in vocabulary["S"]["word"]:
+                vocabulary["S"]["word"].append(s)
+                vocabulary["S"]["vec"].append(word2vec[s])
 
         for a in chf.context_symbolic.amods:
-            if a not in vocabulary['A']['word']:
-                vocabulary['A']['word'].append(a)
-                vocabulary['A']['vec'].append(word2vec[a])
+            if a not in vocabulary["A"]["word"]:
+                vocabulary["A"]["word"].append(a)
+                vocabulary["A"]["vec"].append(word2vec[a])
 
         for ans_sym in chf.choices_symbolic:
             for n in ans_sym.nouns:
-                if n not in vocabulary['N']['word']:
-                    vocabulary['N']['word'].append(n)
-                    vocabulary['N']['vec'].append(word2vec[n])
+                if n not in vocabulary["N"]["word"]:
+                    vocabulary["N"]["word"].append(n)
+                    vocabulary["N"]["vec"].append(word2vec[n])
 
             for v in ans_sym.verbs:
-                if v not in vocabulary['V']['word']:
-                    vocabulary['V']['word'].append(v)
-                    vocabulary['V']['vec'].append(word2vec[v])
+                if v not in vocabulary["V"]["word"]:
+                    vocabulary["V"]["word"].append(v)
+                    vocabulary["V"]["vec"].append(word2vec[v])
 
             for s in ans_sym.subjs:
-                if s not in vocabulary['S']['word']:
-                    vocabulary['S']['word'].append(s)
-                    vocabulary['S']['vec'].append(word2vec[s])
+                if s not in vocabulary["S"]["word"]:
+                    vocabulary["S"]["word"].append(s)
+                    vocabulary["S"]["vec"].append(word2vec[s])
 
             for a in ans_sym.amods:
-                if a not in vocabulary['A']['word']:
-                    vocabulary['A']['word'].append(a)
-                    vocabulary['A']['vec'].append(word2vec[a])
+                if a not in vocabulary["A"]["word"]:
+                    vocabulary["A"]["word"].append(a)
+                    vocabulary["A"]["vec"].append(word2vec[a])
 
     return vocabulary
 
-def build_supervectors(vocabulary, word2vec):
+
+def build_supervectors(word2vec, vocabulary):
 
     # NOUNS
-    words, vecs = vocabulary['N']['word'], all_but_the_top(np.vstack(vocabulary['N']['vec']), 1)
-    constituents, meanvectors = get_dense_clusters(word2vec, words, vecs)
-    with open('knowledge/nouns/words.pkl', 'wb') as d:
+    words, vecs = vocabulary["N"]["word"], all_but_the_top(np.vstack(vocabulary["N"]["vec"]), 1)
+    constituents, supernouns = get_dense_clusters(word2vec, words, vecs)
+    with open("knowledge/nouns/words.pkl", "wb") as d:
         pickle.dump(constituents, d)
 
-    with open('knowledge/nouns/super.pkl', 'wb') as d:
-        pickle.dump(meanvectors, d)
+    with open("knowledge/nouns/super.pkl", "wb") as d:
+        pickle.dump(supernouns, d)
 
     # VERBS
-    words, vecs = vocabulary['V']['word'], all_but_the_top(np.vstack(vocabulary['V']['vec']), 1)
-    constituents, meanvectors = get_dense_clusters(word2vec, words, vecs)
-    with open('knowledge/verbs/words.pkl', 'wb') as d:
+    words, vecs = vocabulary["V"]["word"], all_but_the_top(np.vstack(vocabulary["V"]["vec"]), 1)
+    constituents, superverbs = get_dense_clusters(word2vec, words, vecs)
+    with open("knowledge/verbs/words.pkl", "wb") as d:
         pickle.dump(constituents, d)
 
-    with open('knowledge/verbs/super.pkl', 'wb') as d:
-        pickle.dump(meanvectors, d)
+    with open("knowledge/verbs/super.pkl", "wb") as d:
+        pickle.dump(superverbs, d)
 
     # SUBJECTS
-    words, vecs = vocabulary['S']['word'], all_but_the_top(np.vstack(vocabulary['S']['vec']), 1)
-    constituents, meanvectors = get_dense_clusters(word2vec, words, vecs)
-    with open('knowledge/subjs/words.pkl', 'wb') as d:
+    words, vecs = vocabulary["S"]["word"], all_but_the_top(np.vstack(vocabulary["S"]["vec"]), 1)
+    constituents, supersubjs = get_dense_clusters(word2vec, words, vecs)
+    with open("knowledge/subjs/words.pkl", "wb") as d:
         pickle.dump(constituents, d)
 
-    with open('knowledge/subjs/super.pkl', 'wb') as d:
-        pickle.dump(meanvectors, d)
+    with open("knowledge/subjs/super.pkl", "wb") as d:
+        pickle.dump(supersubjs, d)
 
     # ADJECTIVES
-    words, vecs = vocabulary['A']['word'], all_but_the_top(np.vstack(vocabulary['A']['vec']), 1)
-    constituents, meanvectors = get_dense_clusters(word2vec, words, vecs)
-    with open('knowledge/adjs/words.pkl', 'wb') as d:
+    words, vecs = vocabulary["A"]["word"], all_but_the_top(np.vstack(vocabulary["A"]["vec"]), 1)
+    constituents, superadjs = get_dense_clusters(word2vec, words, vecs)
+    with open("knowledge/adjs/words.pkl", "wb") as d:
         pickle.dump(constituents, d)
 
-    with open('knowledge/adjs/super.pkl', 'wb') as d:
-        pickle.dump(meanvectors, d)
+    with open("knowledge/adjs/super.pkl", "wb") as d:
+        pickle.dump(superadjs, d)
+
+    return list(supernouns.values()), list(superverbs.values()), list(supersubjs.values()), list(superadjs.values())
+
 
 def get_dense_clusters(word2vec, words, vecs):
-    x2d = UMAP(n_components=8, n_neighbors=3, min_dist=0.01, metric='cosine', random_state=444).fit_transform(vecs)
+    x2d = UMAP(n_components=8, n_neighbors=3, min_dist=0.01, metric="cosine", random_state=444).fit_transform(vecs)
     optics = OPTICS(xi=0.1, min_cluster_size=0.01).fit(x2d)
 
     label2words, label2super = {}, {}
@@ -235,28 +237,30 @@ def get_dense_clusters(word2vec, words, vecs):
 
     return label2words, label2super
 
-def encode_symbolic(sf, word2vec, supernouns, superverbs, supersubjs, superadjs):
 
-  nmax, vmax, smax, amax = np.zeros(len(supernouns)), np.zeros(len(superverbs)), np.zeros(len(supersubjs)), np.zeros(len(superadjs))
-  nmin, vmin, smin, amin = np.ones(len(supernouns)), np.ones(len(superverbs)), np.ones(len(supersubjs)), np.ones(len(superadjs))
+def encode_symbolic(word2vec, supernouns, superverbs, supersubjs, superadjs, sf):
 
-  for n in sf.nouns:
-    sims = cosine_sims(word2vec[n], np.vstack(supernouns))
-    nmax, nmin = np.maximum(nmax, sims), np.minimum(nmin, sims)
+    nmax, vmax, smax, amax = np.zeros(len(supernouns)), np.zeros(len(superverbs)), np.zeros(len(supersubjs)), np.zeros(len(superadjs))
+    nmin, vmin, smin, amin = np.ones(len(supernouns)), np.ones(len(superverbs)), np.ones(len(supersubjs)), np.ones(len(superadjs))
 
-  for v in sf.verbs:
-    sims = cosine_sims(word2vec[v], np.vstack(superverbs))
-    vmax, vmin = np.maximum(vmax, sims), np.minimum(vmin, sims)
+    for n in sf.nouns:
+        sims = cosine_sims(word2vec[n], np.vstack(supernouns))
+        nmax, nmin = np.maximum(nmax, sims), np.minimum(nmin, sims)
 
-  for s in sf.subjs:
-    sims = cosine_sims(word2vec[s], np.vstack(supersubjs))
-    smax, smin = np.maximum(smax, sims), np.minimum(smin, sims)
+    for v in sf.verbs:
+        sims = cosine_sims(word2vec[v], np.vstack(superverbs))
+        vmax, vmin = np.maximum(vmax, sims), np.minimum(vmin, sims)
 
-  for a in sf.amods:
-    sims = cosine_sims(word2vec[a], np.vstack(superadjs))
-    amax, amin = np.maximum(amax, sims), np.minimum(amin, sims)
+    for s in sf.subjs:
+        sims = cosine_sims(word2vec[s], np.vstack(supersubjs))
+        smax, smin = np.maximum(smax, sims), np.minimum(smin, sims)
 
-  sf.vector = np.concatenate([nmax, nmin, vmax, vmin, smax, smin, amax, amin])
+    for a in sf.amods:
+        sims = cosine_sims(word2vec[a], np.vstack(superadjs))
+        amax, amin = np.maximum(amax, sims), np.minimum(amin, sims)
+
+    sf.vector = np.concatenate([nmax, nmin, vmax, vmin, smax, smin, amax, amin])
+
 
 def encode_structural_and_raw_symbolic(nlp, word2vec, text):
 
@@ -348,6 +352,7 @@ def encode_structural_and_raw_symbolic(nlp, word2vec, text):
 
     return StructuralFeatures(feature[:3], feature[3:6], feature[6:9], feature[9:12], feature[12:14], feature[14:], feature), SymbolicFeatures(NOUNS, VERBS, SUBJS, AMODS, PHRASES, [])
 
+
 def extract(examples):
 
     nlp = spacy.load("en_core_web_lg")
@@ -366,13 +371,15 @@ def extract(examples):
 
         features.append(CaseHOLDFeatures(ex.example_id, ctx_str, ctx_sym, ans_strs, ans_syms))
 
-    vocabulary = build_vocabulary(features, legalword2vec)
+    vocabulary = build_vocabulary(legalword2vec, features)
+    supernn, supervb, supersj, superad = build_supervectors(legalword2vec, vocabulary)
 
-
+    for chf in features:
+        encode_symbolic(legalword2vec, supernn, supervb, supersj, superad, chf.context_symbolic)
+        for ans_sym in chf.choices_symbolic:
+            encode_symbolic(legalword2vec, supernn, supervb, supersj, superad, ans_sym)
 
     return features
-
-
 
 
 # def __main__():
