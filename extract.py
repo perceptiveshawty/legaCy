@@ -359,7 +359,7 @@ def extract(examples):
     legalword2vec = LegalVectors()
 
     features = []
-    for ex in examples[:10000]:
+    for ex in examples[:1500]:
         ans_strs, ans_syms = [], []
         ctx_str, ctx_sym = encode_structural_and_raw_symbolic(nlp, legalword2vec, ex.context)
 
@@ -382,10 +382,18 @@ def extract(examples):
     return features
 
 
-# def __main__():
+def __main__():
 
-#     casehold = []
-#     with open('data/casehold/data/casehold.csv', 'r', encoding='utf-8') as f:
-#         raw = list(csv.reader(f))
-#     casehold = [CaseHOLDInstance(line[0], line[1], line[2:7], line[-1]) for line in raw]
+    casehold = []
+    with open("data/casehold/data/casehold.csv", "r", encoding="utf-8") as f:
+        raw = list(csv.reader(f))
+    casehold = [CaseHOLDInstance(line[0], line[1], line[2:7], line[-1]) for line in raw[1:]]
 
+    features = extract(casehold)
+
+    with open("checkpoints/fullv1.pkl", "wb") as d:
+        pickle.dump(features, d)
+
+
+if __name__ == "__main__":
+    __main__()
