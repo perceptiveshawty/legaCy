@@ -1,34 +1,16 @@
-from base64 import encode
-from multiprocessing.sharedctypes import Value
+import pickle
+import numpy as np
+import csv
 import spacy
-from ext.luima_sbd.sbd import text2sentences
 
+from ext.luima_sbd.sbd import text2sentences
 from ext.tmvm.extract_features import compute_grammatical_feats, get_clause_components
 from ext.tmvm.split_units_ud import split_into_clauses, unit_from_sentence
-
-import numpy as np
-
-from thinc.types import Floats1d, Dict, List, Tuple
-
-from dataclasses import dataclass
-
 from ext.lmtc.legalword2vec import LegalVectors
 from mood import mood
 from modality import modality
 
-import pickle
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
-from pprint import pprint
-
-from umap import UMAP
-from sklearn.cluster import OPTICS
-from sklearn.decomposition import PCA
-
-
-import csv
+from utils import *
 
 """
 Adapted code from:
@@ -40,202 +22,7 @@ https://github.com/jsavelka/luima_sbd
 Static word vectors from:
 https://github.com/ashkonf/LeGloVe
 https://archive.org/details/Law2Vec
-
-
-
-
 """
-
-
-@dataclass(frozen=True)
-class CaseHOLDInstance:
-    """
-    A single training/test example for the CaseHOLD multiple-choice question answering task.
-    Args:
-        example_id: Unique id for the example.
-        context: str. The untokenized text of the first sequence (context of corresponding question).
-        choices: list of str. Multiple choice's options.
-        answer: int. Index of the correct answer in choices (zero-indexed)
-    """
-
-    example_id: int
-    context: str
-    choices: List[str]
-    answer: int
-
-
-@dataclass
-class SymbolicFeatures:
-
-    nouns: List[str]
-    verbs: List[str]
-    subjs: List[str]
-    amods: List[str]
-    phrases: List[Tuple[str, List[str]]]
-    vector: Floats1d
-
-
-@dataclass
-class StructuralFeatures:
-
-    verb_form: Floats1d  # ["Fin", "Inf", "Part"]
-    tense: Floats1d  # ["Fut", "Past", "Pres"]
-    aspect: Floats1d  # ["Imp", "Perf", "Prog"]
-    mood: Floats1d  # ["Ind", "Cnd", "Sub"]
-    voice: Floats1d  # ["Act", "Pass"]
-    modality: Floats1d  # [Minimum, Mean, Maximum]
-    vector: Floats1d
-
-
-@dataclass
-class CaseHOLDFeatures:
-    example_id: int
-    context_structural: StructuralFeatures
-    context_symbolic: SymbolicFeatures
-    choices_structural: List[StructuralFeatures]
-    choices_symbolic: List[SymbolicFeatures]
-
-
-def L1_SOW(vectors):
-    sum_ = np.sum(vectors)
-    return sum_ / np.linalg.norm(sum)
-
-
-def all_but_the_top(v, D):
-    """
-      All-but-the-Top: Simple and Effective Postprocessing for Word Representations
-      https://arxiv.org/abs/1702.01417
-      Arguments:
-          :v: word vectors of shape (n_words, n_dimensions)
-          :D: number of principal components to subtract
-      """
-    # 1. Subtract mean vector
-    v_tilde = v - np.mean(v, axis=0)
-    # 2. Compute the first `D` principal components
-    #    on centered embedding vectors
-    u = PCA(n_components=D).fit(v_tilde).components_  # [D, emb_size]
-    # Subtract first `D` principal components
-    # [vocab_size, emb_size] @ [emb_size, D] @ [D, emb_size] -> [vocab_size, emb_size]
-    return v_tilde - (v @ u.T @ u)
-
-
-def cosine_sims(query, supers):
-    norm = np.linalg.norm(query)
-    all_norms = np.linalg.norm(supers, axis=1)
-    dot_products = np.dot(supers, query)
-    similarities = dot_products / (norm * all_norms)
-    return similarities
-
-
-def build_vocabulary(word2vec, features):
-    vocabulary = {"N": {"word": [], "vec": []}, "V": {"word": [], "vec": []}, "S": {"word": [], "vec": []}, "A": {"word": [], "vec": []}}
-
-    for chf in features:
-
-        for n in chf.context_symbolic.nouns:
-            if n not in vocabulary["N"]["word"]:
-                vocabulary["N"]["word"].append(n)
-                vocabulary["N"]["vec"].append(word2vec[n])
-
-        for v in chf.context_symbolic.verbs:
-            if v not in vocabulary["V"]["word"]:
-                vocabulary["V"]["word"].append(v)
-                vocabulary["V"]["vec"].append(word2vec[v])
-
-        for s in chf.context_symbolic.subjs:
-            if s not in vocabulary["S"]["word"]:
-                vocabulary["S"]["word"].append(s)
-                vocabulary["S"]["vec"].append(word2vec[s])
-
-        for a in chf.context_symbolic.amods:
-            if a not in vocabulary["A"]["word"]:
-                vocabulary["A"]["word"].append(a)
-                vocabulary["A"]["vec"].append(word2vec[a])
-
-        for ans_sym in chf.choices_symbolic:
-            for n in ans_sym.nouns:
-                if n not in vocabulary["N"]["word"]:
-                    vocabulary["N"]["word"].append(n)
-                    vocabulary["N"]["vec"].append(word2vec[n])
-
-            for v in ans_sym.verbs:
-                if v not in vocabulary["V"]["word"]:
-                    vocabulary["V"]["word"].append(v)
-                    vocabulary["V"]["vec"].append(word2vec[v])
-
-            for s in ans_sym.subjs:
-                if s not in vocabulary["S"]["word"]:
-                    vocabulary["S"]["word"].append(s)
-                    vocabulary["S"]["vec"].append(word2vec[s])
-
-            for a in ans_sym.amods:
-                if a not in vocabulary["A"]["word"]:
-                    vocabulary["A"]["word"].append(a)
-                    vocabulary["A"]["vec"].append(word2vec[a])
-
-    return vocabulary
-
-
-def build_supervectors(word2vec, vocabulary):
-
-    # NOUNS
-    words, vecs = vocabulary["N"]["word"], all_but_the_top(np.vstack(vocabulary["N"]["vec"]), 1)
-    constituents, supernouns = get_dense_clusters(word2vec, words, vecs)
-    with open("knowledge/nouns/words.pkl", "wb") as d:
-        pickle.dump(constituents, d)
-
-    with open("knowledge/nouns/super.pkl", "wb") as d:
-        pickle.dump(supernouns, d)
-
-    # VERBS
-    words, vecs = vocabulary["V"]["word"], all_but_the_top(np.vstack(vocabulary["V"]["vec"]), 1)
-    constituents, superverbs = get_dense_clusters(word2vec, words, vecs)
-    with open("knowledge/verbs/words.pkl", "wb") as d:
-        pickle.dump(constituents, d)
-
-    with open("knowledge/verbs/super.pkl", "wb") as d:
-        pickle.dump(superverbs, d)
-
-    # SUBJECTS
-    words, vecs = vocabulary["S"]["word"], all_but_the_top(np.vstack(vocabulary["S"]["vec"]), 1)
-    constituents, supersubjs = get_dense_clusters(word2vec, words, vecs)
-    with open("knowledge/subjs/words.pkl", "wb") as d:
-        pickle.dump(constituents, d)
-
-    with open("knowledge/subjs/super.pkl", "wb") as d:
-        pickle.dump(supersubjs, d)
-
-    # ADJECTIVES
-    words, vecs = vocabulary["A"]["word"], all_but_the_top(np.vstack(vocabulary["A"]["vec"]), 1)
-    constituents, superadjs = get_dense_clusters(word2vec, words, vecs)
-    with open("knowledge/adjs/words.pkl", "wb") as d:
-        pickle.dump(constituents, d)
-
-    with open("knowledge/adjs/super.pkl", "wb") as d:
-        pickle.dump(superadjs, d)
-
-    return list(supernouns.values()), list(superverbs.values()), list(supersubjs.values()), list(superadjs.values())
-
-
-def get_dense_clusters(word2vec, words, vecs):
-    x2d = UMAP(n_components=8, n_neighbors=3, min_dist=0.01, metric="cosine", random_state=444).fit_transform(vecs)
-    optics = OPTICS(xi=0.1, min_cluster_size=0.01).fit(x2d)
-
-    label2words, label2super = {}, {}
-    for label, word in zip(optics.labels_, words):
-        if label == -1:
-            continue
-        elif label not in label2words:
-            label2words[label] = []
-            label2super[label] = []
-
-        label2words[label].append(word)
-        label2super[label].append(word2vec[word])
-
-    for label, subvecs in label2super.items():
-        label2super[label] = np.mean(np.array(subvecs), axis=0)
-
-    return label2words, label2super
 
 
 def encode_symbolic(word2vec, supernouns, superverbs, supersubjs, superadjs, sf):
@@ -332,9 +119,9 @@ def encode_structural_and_raw_symbolic(nlp, word2vec, text):
             except:
                 attribute_total = 0
             for option in tvmm[attribute]:
-                try:
+                if attribute_total > 0:
                     feature.append(tvmm[attribute][option] / attribute_total)
-                except:
+                else:
                     feature.append(0)
         else:  # Modality - special case
             try:
@@ -353,13 +140,13 @@ def encode_structural_and_raw_symbolic(nlp, word2vec, text):
     return StructuralFeatures(feature[:3], feature[3:6], feature[6:9], feature[9:12], feature[12:14], feature[14:], feature), SymbolicFeatures(NOUNS, VERBS, SUBJS, AMODS, PHRASES, [])
 
 
-def extract(examples):
+def extract_features(examples):
 
     nlp = spacy.load("en_core_web_lg")
     legalword2vec = LegalVectors()
 
     features = []
-    for ex in examples[:1500]:
+    for ex in examples:
         ans_strs, ans_syms = [], []
         ctx_str, ctx_sym = encode_structural_and_raw_symbolic(nlp, legalword2vec, ex.context)
 
@@ -387,11 +174,14 @@ def __main__():
     casehold = []
     with open("data/casehold/data/casehold.csv", "r", encoding="utf-8") as f:
         raw = list(csv.reader(f))
-    casehold = [CaseHOLDInstance(line[0], line[1], line[2:7], line[-1]) for line in raw[1:]]
+    casehold = [CaseHOLDExample(line[0], line[1], line[2:7], int(line[-1])) for line in raw[1:] if line[-1] != ""]
 
-    features = extract(casehold)
+    with open("data/casehold/datav2.pkl", "wb") as d:
+        pickle.dump(casehold, d)
 
-    with open("checkpoints/fullv1.pkl", "wb") as d:
+    features = extract_features(casehold)
+
+    with open("checkpoints/fullv2.pkl", "wb") as d:
         pickle.dump(features, d)
 
 
